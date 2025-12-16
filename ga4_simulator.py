@@ -50,6 +50,19 @@ PRODUCTS = [
     {"id": "sku_110", "name": "Desk Lamp", "price": 45.00}
 ]
 
+def weighted_random_traffic_source():
+    roll = random.random()
+    if roll < 0.4:
+        return {"medium": "organic", "source": "google"}
+    elif roll < 0.6:
+        return {"medium": "(none)", "source": "(direct)"}
+    else:
+        return random.choice([
+            ts for ts in TRAFFIC_SOURCES
+            if not (ts["medium"] == "organic" and ts["source"] == "google")
+            and not (ts["medium"] == "(none)" and ts["source"] == "(direct)")
+        ])
+
 def send_event(payload):
     url = f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}"
     response = requests.post(url, json=payload)
@@ -60,7 +73,7 @@ def simulate_session(client_id, purchase_chance=0.2):
     user_lang = random.choice(LANGUAGES)
     user_device = random.choice(DEVICES)
     user_country = random.choice(COUNTRIES)
-    traffic = random.choice(TRAFFIC_SOURCES)
+    traffic = weighted_random_traffic_source()
 
     common_payload = {
         "client_id": client_id,
