@@ -1,5 +1,5 @@
 name: Simulator
-
+# This triggers the cron scheduler to initialize
 on:
   schedule:
     - cron: '0 * * * *'  # Every hour (UTC)
