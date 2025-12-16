@@ -13,12 +13,19 @@ USER_POOL = [str(uuid.uuid4()) for _ in range(50)]
 TRAFFIC_SOURCES = [
     {"medium": "organic", "source": "google"},
     {"medium": "organic", "source": "bing"},
-    {"medium": "cpc", "source": "google", "campaign": "spring_sale"},
-    {"medium": "email", "source": "newsletter", "campaign": "monthly_update"},
-    {"medium": "social", "source": "facebook"},
-    {"medium": "referral", "source": "partner-site.com"},
-    {"medium": "direct", "source": "(direct)"},
-    {"medium": "display", "source": "gdn", "campaign": "banner_campaign"}
+    {"medium": "organic", "source": "yahoo"},
+    {"medium": "cpc", "source": "google", "campaign": "spring+promotion"},
+    {"medium": "email", "source": "newsletter", "campaign": "monthly+update"},
+    {"medium": "referral", "source": "facebook.com"},
+    {"medium": "paid", "source": "facebook.com", "campaign": "winter+promotion"},
+    {"medium": "referral", "source": "linkedin.com"},
+    {"medium": "paid", "source": "linkedin.com", "campaign": "summer+promotion"},
+    {"medium": "referral", "source": "benjaminmangold.com"},
+    {"medium": "referral", "source": "youtube.com"},
+    {"medium": "(none)", "source": "(direct)"},
+    {"medium": "referral", "source": "chatgpt.com"},
+    {"medium": "referral", "source": "gemini.google.com"},
+    {"medium": "(not set)", "source": "chatgpt.com"}
 ]
 
 PAGES = [
