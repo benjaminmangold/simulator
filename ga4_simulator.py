@@ -83,7 +83,7 @@ def simulate_session(client_id, purchase_chance=0.2):
             "events": [{
                 "name": "page_view",
                 "params": {
-                    "page_location": f"https://example.com{path}",
+                    "page_location": f"https://www.lovesdata-test.com{path}",
                     "page_title": path.strip('/').title(),
                     "session_id": session_id,
                     "engagement_time_msec": random.randint(100, 600),
