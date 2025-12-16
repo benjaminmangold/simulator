@@ -3,7 +3,7 @@ name: Simulator
 on:
   workflow_dispatch:
   schedule:
-    - cron: '05 * * * *'  # Every hour (UTC)
+    - cron: "05 * * * *"  # Every hour (UTC)
 
 jobs:
   simulate:
