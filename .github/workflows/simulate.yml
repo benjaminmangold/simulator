@@ -2,7 +2,7 @@ name: Simulator
 # This triggers the cron scheduler to initialize
 on:
   schedule:
-    - cron: '52 * * * *'  # Every hour (UTC)
+    - cron: '55 * * * *'  # Every hour (UTC)
   # workflow_dispatch:
 
 jobs:
