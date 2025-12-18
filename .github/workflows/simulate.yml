@@ -28,5 +28,5 @@ jobs:
         env:
           MEASUREMENT_ID: ${{ secrets.MEASUREMENT_ID }}
           API_SECRET: ${{ secrets.API_SECRET }}
-          SIMULATOR_MODE: ${{ inputs.mode || 'live' }}
+          SIMULATOR_MODE: ${{ github.event_name == 'schedule' && 'live' || 'debug' }}
         run: python simulator.py
