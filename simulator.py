@@ -276,6 +276,7 @@ def simulate_one_session(client_id: str) -> None:
 
     # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
     pv1_params = {
+        "session_id": ga_session_id,
         "ga_session_id": ga_session_id,
         "ga_session_number": ga_session_number,
         "page_location": first_url,
@@ -307,7 +308,8 @@ def simulate_one_session(client_id: str) -> None:
     # Engagement helper event at +12s (75% of sessions)
     if random.random() < 0.75:
         scroll_params = {
-            "ga_session_id": ga_session_id,
+            "session_id": ga_session_id,
+        "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "language": lang,
             "engagement_time_msec": random.randint(800, 2500),
@@ -321,7 +323,8 @@ def simulate_one_session(client_id: str) -> None:
     for path in paths[1:]:
         url = f"{BASE_DOMAIN}{path}"
         params = {
-            "ga_session_id": ga_session_id,
+            "session_id": ga_session_id,
+        "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "page_location": url,
             "page_title": path.strip("/").title() or "Home",
@@ -349,7 +352,8 @@ def simulate_one_session(client_id: str) -> None:
 
         def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
             params = {
-                "ga_session_id": ga_session_id,
+                "session_id": ga_session_id,
+        "ga_session_id": ga_session_id,
                 "ga_session_number": ga_session_number,
                 "currency": currency,
                 "items": [item],
