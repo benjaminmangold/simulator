@@ -2,352 +2,417 @@ import os
 import random
 import time
 import uuid
-import requests
 from datetime import datetime, timezone
 
+import requests
+
+# ----------------------------
+# Configuration (via GitHub Secrets / Env Vars)
+# ----------------------------
 MEASUREMENT_ID = os.getenv("MEASUREMENT_ID")
 API_SECRET = os.getenv("API_SECRET")
 
+# Mode switch:
+#   SIMULATOR_MODE=live  -> sends to /mp/collect (default)
+#   SIMULATOR_MODE=debug -> sends to /mp/debug/collect and prints validationMessages
+# Backward-compatible: DEBUG=1 also enables debug mode.
+SIMULATOR_MODE = os.getenv("SIMULATOR_MODE", "live").strip().lower()
+DEBUG_FLAG = os.getenv("DEBUG", "").strip().lower() in ("1", "true", "yes", "y")
+DEBUG_MODE = (SIMULATOR_MODE == "debug") or DEBUG_FLAG
+
+
 if not MEASUREMENT_ID or not API_SECRET:
-    raise RuntimeError("Missing MEASUREMENT_ID and/or API_SECRET environment variables.")
+    raise RuntimeError("Missing MEASUREMENT_ID or API_SECRET environment variables.")
 
-# --- Run-level device mix (requested) ---
-DESKTOP_SHARE = random.uniform(0.65, 0.85)
+MP_COLLECT = "https://www.google-analytics.com/mp/collect"
+MP_DEBUG_COLLECT = "https://www.google-analytics.com/mp/debug/collect"
 
-# --- Pools / options ---
-def generate_client_id() -> str:
-    # GA-style client_id looks like two large integers separated by a dot.
-    return f"{random.randint(1000000000, 9999999999)}.{random.randint(1000000000, 9999999999)}"
+# ----------------------------
+# Debug presets
+# When DEBUG_MODE is enabled, we default to smaller volumes unless you explicitly set env vars.
+# ----------------------------
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v is None or str(v).strip() == "":
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
 
-USER_POOL = [generate_client_id() for _ in range(800)]
+DEFAULT_USER_POOL_SIZE = 50 if DEBUG_MODE else 400
+DEFAULT_SESSIONS_PER_RUN = 3 if DEBUG_MODE else 20
 
-# Session traffic sources (extend as you like)
-TRAFFIC_SOURCES = [
-    {"medium": "organic", "source": "google"},
-    {"medium": "organic", "source": "bing"},
-    {"medium": "organic", "source": "yahoo"},
-    {"medium": "organic", "source": "duckduckgo"},
-    {"medium": "cpc", "source": "google", "campaign": "spring+promotion"},
-    {"medium": "cpc", "source": "google", "campaign": "performance+max"},
-    {"medium": "cpc", "source": "google", "campaign": "branded"},
-    {"medium": "email", "source": "newsletter", "campaign": "monthly+update"},
-    {"medium": "referral", "source": "facebook.com"},
-    {"medium": "referral", "source": "l.instagram.com"},
-    {"medium": "paid", "source": "facebook.com", "campaign": "winter+promotion"},
-    {"medium": "referral", "source": "linkedin.com"},
-    {"medium": "paid", "source": "linkedin.com", "campaign": "summer+promotion"},
-    {"medium": "referral", "source": "benjaminmangold.com"},
-    {"medium": "referral", "source": "youtube.com"},
-    {"medium": "(none)", "source": "(direct)"},
-    {"medium": "referral", "source": "chatgpt.com"},
-    {"medium": "referral", "source": "gemini.google.com"},
-    {"medium": "(not set)", "source": "chatgpt.com"},
-]
 
-def weighted_random_traffic_source():
-    # Bias toward a more realistic mix.
-    roll = random.random()
-    if roll < 0.45:
-        return {"medium": "organic", "source": "google"}
-    if roll < 0.60:
-        return {"medium": "(none)", "source": "(direct)"}
-    if roll < 0.72:
-        return {"medium": "cpc", "source": "google", "name": random.choice(["performance+mac", "branded", "spring+promotion"])}
-    if roll < 0.84:
-        return {"medium": "referral", "source": random.choice(["facebook.com", "l.instagram.com", "youtube.com"])}
-    if roll < 0.92:
-        return {"medium": "email", "source": "newsletter", "name": random.choice(["welcome+series", "promotion"])}
-    return random.choice(TRAFFIC_SOURCES)
-
-# Use standard language tags so GA4 doesn't bucket as "other"
-LANGUAGES = [
-    ("en-us", 0.70),
-    ("en-au", 0.10),
-    ("en-gb", 0.07),
-    ("de-de", 0.04),
-    ("fr-fr", 0.04),
-    ("es-es", 0.03),
-    ("nl-nl", 0.02),
-]
-
-def weighted_choice(weighted_items):
-    r = random.random()
-    acc = 0.0
-    for item, w in weighted_items:
-        acc += w
-        if r <= acc:
-            return item
-    return weighted_items[-1][0]
-
-# Device profiles (UA drives GA4 device details; screen/OS/platform are matched)
+# ----------------------------
+# Realistic device profiles (UA + matching hints)
+# NOTE: UA is sent as an HTTP header (GA4 derives device/OS/browser from it)
+# ----------------------------
 DESKTOP_PROFILES = [
     {
-        "label": "Desktop Chrome (Windows)",
+        "device_category": "desktop",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "screen_resolution": "1440x900",
+        "platform": "web",
+        "os": "macOS",
+    },
+    {
+        "device_category": "desktop",
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "screen_resolution": "1920x1080",
+        "platform": "web",
         "os": "Windows",
-        "platform_hint": "desktop",
     },
     {
-        "label": "Desktop Chrome (macOS)",
-        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "screen_resolution": "2560x1440",
-        "os": "macOS",
-        "platform_hint": "desktop",
-    },
-    {
-        "label": "Desktop Safari (macOS)",
-        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-        "screen_resolution": "1440x900",
-        "os": "macOS",
-        "platform_hint": "desktop",
+        "device_category": "desktop",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "screen_resolution": "1920x1080",
+        "platform": "web",
+        "os": "Linux",
     },
 ]
 
 MOBILE_PROFILES = [
     {
-        "label": "iPhone Safari (iOS)",
+        "device_category": "mobile",
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
         "screen_resolution": "390x844",
+        "platform": "web",
         "os": "iOS",
-        "platform_hint": "mobile",
     },
     {
-        "label": "Android Chrome (Pixel)",
+        "device_category": "mobile",
         "user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         "screen_resolution": "412x915",
+        "platform": "web",
         "os": "Android",
-        "platform_hint": "mobile",
+    },
+    {
+        "device_category": "mobile",
+        "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "screen_resolution": "360x800",
+        "platform": "web",
+        "os": "Android",
     },
 ]
 
-# Countries for geo signals (optional; GA4 geo is primarily IP-derived)
-COUNTRIES = ["AU", "NZ", "US", "GB", "CA", "DE", "FR", "NL"]
-
-# Ecommerce products
-PRODUCTS = [
-    {"id": "sku_201", "name": "GA4 Complete Course", "category": "Courses", "price": 225.00},
-    {"id": "sku_202", "name": "Google Tag Manager Course", "category": "Courses", "price": 225.00},
-    {"id": "sku_203", "name": "Looker Studio Course", "category": "Courses", "price": 125.00},
-    {"id": "sku_204", "name": "Google Ads Fundamentals Course", "category": "Courses", "price": 225.00},
+# ----------------------------
+# Language / geo (language must be an event param to populate Language; GA4 will bucket unknowns as "Other")
+# ----------------------------
+LANGUAGES = [
+    ("en-au", 0.72),
+    ("en-us", 0.10),
+    ("en-gb", 0.08),
+    ("de-de", 0.03),
+    ("fr-fr", 0.03),
+    ("es-es", 0.02),
+    ("nl-nl", 0.02),
 ]
 
-BASE_URL = os.getenv("BASE_URL", "https://www.lovesdata-test.com")
+COUNTRIES = [
+    ("Australia", 0.70),
+    ("United States", 0.10),
+    ("United Kingdom", 0.08),
+    ("Canada", 0.05),
+    ("New Zealand", 0.04),
+    ("Germany", 0.02),
+    ("France", 0.01),
+]
 
-def _now_ms() -> int:
-    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+# ----------------------------
+# Traffic sources (session-level). This will populate Session source/medium when sent at session start.
+# ----------------------------
+TRAFFIC_SOURCES = [
+    ({"source": "google", "medium": "organic"}, 0.35),
+    ({"source": "bing", "medium": "organic"}, 0.06),
+    ({"source": "direct", "medium": "(none)"}, 0.20),
+    ({"source": "newsletter", "medium": "email", "campaign": "monthly_update"}, 0.10),
+    ({"source": "facebook.com", "medium": "paid", "campaign": "winter_promo"}, 0.07),
+    ({"source": "instagram.com", "medium": "paid", "campaign": "reels_promo"}, 0.05),
+    ({"source": "linkedin.com", "medium": "referral"}, 0.05),
+    ({"source": "google", "medium": "cpc", "campaign": "spring_promotion"}, 0.12),
+]
 
-def send_event(payload: dict, user_agent: str):
-    url = f"https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}"
-    headers = {"User-Agent": user_agent}
-    response = requests.post(url, json=payload, headers=headers, timeout=20)
-    event_name = payload.get("events", [{}])[0].get("name", "unknown")
-    print(f"[{payload['client_id'][:12]}...] Sent: {event_name} | Status: {response.status_code}")
+# ----------------------------
+# Site + ecommerce
+# ----------------------------
+HOST = "https://demo.lovesdata-test.com"
 
-def make_item(product: dict, quantity: int = 1) -> dict:
-    return {
-        "item_id": product["id"],
-        "item_name": product["name"],
-        "item_category": product["category"],
-        "price": float(product["price"]),
-        "quantity": int(quantity),
+PAGES = [
+    "/",
+    "/blog/",
+    "/blog/google-analytics-4/",
+    "/blog/google-tag-manager/",
+    "/courses/",
+    "/ga4-complete-course/",
+    "/gtm-course/",
+    "/contact/",
+]
+
+PRODUCTS = [
+    {"item_id": "sku_ga4_course", "item_name": "GA4 Complete Course", "item_category": "Courses", "price": 199.0},
+    {"item_id": "sku_gtm_course", "item_name": "Google Tag Manager Course", "item_category": "Courses", "price": 149.0},
+    {"item_id": "sku_looker_course", "item_name": "Looker Studio Course", "item_category": "Courses", "price": 129.0},
+]
+
+CURRENCY = "AUD"
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def weighted_choice(weighted):
+    r = random.random()
+    cumulative = 0.0
+    for item, w in weighted:
+        cumulative += w
+        if r <= cumulative:
+            return item
+    return weighted[-1][0]
+
+def make_client_id():
+    # GA-style client_id tends to look like "1234567890.1234567890"
+    return f"{random.randint(1000000000, 9999999999)}.{random.randint(1000000000, 9999999999)}"
+
+def now_micros():
+    return int(time.time() * 1_000_000)
+
+def send_mp(payload, user_agent):
+    endpoint = MP_DEBUG_COLLECT if DEBUG_MODE else MP_COLLECT
+    url = f"{endpoint}?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}"
+
+    headers = {
+        "User-Agent": user_agent,
+        "Content-Type": "application/json",
     }
 
-def choose_device_profile() -> dict:
-    if random.random() < DESKTOP_SHARE:
+    resp = requests.post(url, headers=headers, json=payload, timeout=20)
+
+    if DEBUG_MODE:
+        try:
+            data = resp.json()
+            msgs = data.get("validationMessages", [])
+            if msgs:
+                print("Validation messages:")
+                for m in msgs[:10]:
+                    print(f" - {m.get('description')}")
+        except Exception:
+            pass
+
+    return resp.status_code
+
+# ----------------------------
+# Simulator core
+# ----------------------------
+def build_device_profile(desktop_share):
+    if random.random() < desktop_share:
         return random.choice(DESKTOP_PROFILES)
     return random.choice(MOBILE_PROFILES)
 
-def simulate_session(client_id: str, purchase_chance: float = 0.2):
-    session_id = random.randint(10_000_000, 99_999_999)
-    language = weighted_choice(LANGUAGES)
-    device = choose_device_profile()
-    country = random.choice(COUNTRIES)
-    traffic = weighted_random_traffic_source()
+def simulate_session(client_id, session_number, desktop_share, purchase_session_chance=0.25):
+    # GA4 sessions are stitched using ga_session_id + ga_session_number
+    ga_session_id = random.randint(1_000_000_000, 2_000_000_000)
 
-    # Timestamp base for this session (ms)
-    t0_ms = _now_ms()
+    device = build_device_profile(desktop_share)
+    lang = weighted_choice(LANGUAGES)
+    country = weighted_choice(COUNTRIES)
+    traffic = weighted_choice(TRAFFIC_SOURCES)
 
-    # Common payload fields shared by all events in this session
-    common = {
-        "client_id": client_id,
-        # Sending traffic_source on session start / first hit makes session acquisition populate.
-        "traffic_source": {
-            "source": traffic["source"],
-            "medium": traffic["medium"],
-            **({"name": traffic["name"]} if "name" in traffic else {}),
-        },
-    }
+    # Base time for this session
+    base_ts = now_micros()
 
-    # Common event params (kept consistent through the session)
+    # Common event params (use GA reserved session params)
     common_params = {
-        "session_id": session_id,
-        "language": language,
+        "ga_session_id": ga_session_id,
+        "ga_session_number": session_number,
+        "language": lang,
         "screen_resolution": device["screen_resolution"],
-        # These hints won't drive GA4's built-in device dimensions (UA does),
-        # but they are useful as custom parameters.
-        "device_hint": device["platform_hint"],
-        "os_hint": device["os"],
-        "country_hint": country,
     }
 
-    def emit(event_name: str, offset_ms: int, params: dict):
-        payload = {
-            **common,
-            "timestamp_micros": int((t0_ms + offset_ms) * 1000),
-            "events": [{"name": event_name, "params": params}],
-        }
-        send_event(payload, user_agent=device["user_agent"])
+    # Session-level traffic source
+    traffic_source = {
+        "source": traffic["source"],
+        "medium": traffic["medium"],
+    }
+    if "campaign" in traffic:
+        traffic_source["name"] = traffic["campaign"]
 
-    # --- Session start ---
-    emit(
-        "session_start",
-        0,
-        {
-            **common_params,
-            # engagement_time_msec is important for realistic engagement metrics when using MP.
-            "engagement_time_msec": 1,
-        },
-    )
+    # 1) session_start (t=0)
+    payload = {
+        "client_id": client_id,
+        "timestamp_micros": base_ts,
+        "traffic_source": traffic_source,
+        "events": [{
+            "name": "session_start",
+            "params": {
+                **common_params,
+                "engagement_time_msec": 1
+            }
+        }]
+    }
+    print(f"[{client_id[:12]}...] Sent: session_start | Status: {send_mp(payload, device['user_agent'])}")
 
-    # --- First page view (home) ---
-    emit(
-        "page_view",
-        100,
-        {
-            **common_params,
-            "page_location": f"{BASE_URL}/",
-            "page_title": "Home",
-            "engagement_time_msec": 100,
-        },
-    )
+    # 2) first page_view (t=+150ms) — include traffic_source again for safety
+    first_path = random.choice(PAGES)
+    payload = {
+        "client_id": client_id,
+        "timestamp_micros": base_ts + 150_000,
+        "traffic_source": traffic_source,
+        "events": [{
+            "name": "page_view",
+            "params": {
+                **common_params,
+                "page_location": f"{HOST}{first_path}",
+                "page_title": first_path.strip("/").title() or "Home",
+                "engagement_time_msec": random.randint(10, 200)
+            }
+        }]
+    }
+    print(f"[{client_id[:12]}...] Sent: page_view | Status: {send_mp(payload, device['user_agent'])}")
 
-    # --- Ensure engagement for most sessions ---
-    # 75% of sessions: add a delayed engagement event after 12–25s
+    # 3) engagement event after 10–18s for a portion of sessions (drives engaged sessions)
+    # We also include a second page_view for most sessions (another engaged criterion)
+    engaged_delay_ms = random.randint(10_500, 18_000)
     if random.random() < 0.75:
-        delay = random.randint(12_000, 25_000)
-        emit(
-            random.choice(["scroll", "user_engagement"]),
-            delay,
-            {
-                **common_params,
-                "engagement_time_msec": delay,
-            },
-        )
+        payload = {
+            "client_id": client_id,
+            "timestamp_micros": base_ts + engaged_delay_ms * 1000,
+            "events": [{
+                "name": "scroll",
+                "params": {
+                    **common_params,
+                    "engagement_time_msec": random.randint(800, 2500)
+                }
+            }]
+        }
+        print(f"[{client_id[:12]}...] Sent: scroll | Status: {send_mp(payload, device['user_agent'])}")
 
-    # 45% of sessions: second page view (helps engaged session definition)
-    if random.random() < 0.45:
-        pv2_delay = random.randint(4_000, 18_000)
-        emit(
-            "page_view",
-            pv2_delay,
-            {
-                **common_params,
-                "page_location": f"{BASE_URL}/blog/",
-                "page_title": "Blog",
-                "engagement_time_msec": pv2_delay,
-            },
-        )
+    # 4) additional page views (t=+12–40s spread)
+    pageviews = random.sample(PAGES, random.randint(1, 3))
+    t_ms = random.randint(12_000, 16_000)
+    for path in pageviews:
+        t_ms += random.randint(4_000, 12_000)
+        payload = {
+            "client_id": client_id,
+            "timestamp_micros": base_ts + t_ms * 1000,
+            "events": [{
+                "name": "page_view",
+                "params": {
+                    **common_params,
+                    "page_location": f"{HOST}{path}",
+                    "page_title": path.strip("/").title() or "Home",
+                    "engagement_time_msec": random.randint(300, 1800)
+                }
+            }]
+        }
+        print(f"[{client_id[:12]}...] Sent: page_view | Status: {send_mp(payload, device['user_agent'])}")
 
-    # --- Ecommerce behavior ---
-    # Some sessions are shopping sessions, some just browse.
-    is_shopping_session = random.random() < 0.35
-
-    if is_shopping_session:
+    # 5) Ecommerce funnel for some sessions
+    if random.random() < purchase_session_chance:
         product = random.choice(PRODUCTS)
-        items = [make_item(product, quantity=1)]
+        items = [{
+            "item_id": product["item_id"],
+            "item_name": product["item_name"],
+            "item_category": product["item_category"],
+            "price": product["price"],
+            "quantity": 1
+        }]
 
-        # view_item
-        emit(
-            "view_item",
-            2_000,
-            {
-                **common_params,
-                "currency": "USD",
-                "value": float(product["price"]),
-                "items": items,
-                "engagement_time_msec": 2_000,
-            },
-        )
-
-        # add_to_cart (not everyone adds)
-        if random.random() < 0.35:
-            emit(
-                "add_to_cart",
-                6_000,
-                {
+        # view_item (t=+2–6s)
+        t_ms = random.randint(2_000, 6_000)
+        payload = {
+            "client_id": client_id,
+            "timestamp_micros": base_ts + t_ms * 1000,
+            "events": [{
+                "name": "view_item",
+                "params": {
                     **common_params,
-                    "currency": "USD",
-                    "value": float(product["price"]),
+                    "currency": CURRENCY,
+                    "value": product["price"],
                     "items": items,
-                    "engagement_time_msec": 6_000,
-                },
-            )
+                    "engagement_time_msec": random.randint(200, 800)
+                }
+            }]
+        }
+        print(f"[{client_id[:12]}...] Sent: view_item | Status: {send_mp(payload, device['user_agent'])}")
 
-        # begin_checkout (subset)
-        begin_checkout = random.random() < 0.20
-        if begin_checkout:
-            emit(
-                "begin_checkout",
-                11_000,
-                {
-                    **common_params,
-                    "currency": "USD",
-                    "value": float(product["price"]),
-                    "items": items,
-                    "engagement_time_msec": 11_000,
-                },
-            )
+        # add_to_cart (25–55% of shopping sessions)
+        if random.random() < 0.45:
+            t_ms += random.randint(2_000, 7_000)
+            payload = {
+                "client_id": client_id,
+                "timestamp_micros": base_ts + t_ms * 1000,
+                "events": [{
+                    "name": "add_to_cart",
+                    "params": {
+                        **common_params,
+                        "currency": CURRENCY,
+                        "value": product["price"],
+                        "items": items,
+                        "engagement_time_msec": random.randint(200, 900)
+                    }
+                }]
+            }
+            print(f"[{client_id[:12]}...] Sent: add_to_cart | Status: {send_mp(payload, device['user_agent'])}")
 
-        # purchase (subset; also gated by purchase_chance argument)
-        if begin_checkout and (random.random() < purchase_chance):
-            transaction_id = str(uuid.uuid4())
-            emit(
-                "purchase",
-                20_000,
-                {
-                    **common_params,
-                    "transaction_id": transaction_id,
-                    "currency": "USD",
-                    "value": float(product["price"]),
-                    "tax": round(float(product["price"]) * 0.1, 2),
-                    "shipping": random.choice([0.0, 9.95, 14.95]),
-                    "items": items,
-                    "engagement_time_msec": 20_000,
-                },
-            )
+            # begin_checkout (40–70% of add_to_cart)
+            if random.random() < 0.55:
+                t_ms += random.randint(2_000, 7_000)
+                payload = {
+                    "client_id": client_id,
+                    "timestamp_micros": base_ts + t_ms * 1000,
+                    "events": [{
+                        "name": "begin_checkout",
+                        "params": {
+                            **common_params,
+                            "currency": CURRENCY,
+                            "value": product["price"],
+                            "items": items,
+                            "engagement_time_msec": random.randint(400, 1400)
+                        }
+                    }]
+                }
+                print(f"[{client_id[:12]}...] Sent: begin_checkout | Status: {send_mp(payload, device['user_agent'])}")
+
+                # purchase (25–55% of begin_checkout)
+                if random.random() < 0.40:
+                    t_ms += random.randint(4_000, 12_000)
+                    payload = {
+                        "client_id": client_id,
+                        "timestamp_micros": base_ts + t_ms * 1000,
+                        "events": [{
+                            "name": "purchase",
+                            "params": {
+                                **common_params,
+                                "transaction_id": str(uuid.uuid4()),
+                                "currency": CURRENCY,
+                                "value": product["price"],
+                                "items": items,
+                                "engagement_time_msec": random.randint(800, 2500)
+                            }
+                        }]
+                    }
+                    print(f"[{client_id[:12]}...] Sent: purchase | Status: {send_mp(payload, device['user_agent'])}")
 
 def main():
-    # Randomize volume by day type (kept similar to your original structure, but higher user pool)
-    today = datetime.utcnow().weekday()
-    is_weekend = today in (5, 6)
+    # Random split each run: 65%–85% desktop
+    desktop_share = random.uniform(0.65, 0.85)
+    mode_label = "DEBUG" if DEBUG_MODE else "LIVE"
+    print(f"{mode_label} traffic simulation. Desktop share this run: {round(desktop_share*100)}%")
 
-    if is_weekend:
-        num_users = random.randint(10, 30)
-        session_range = (1, 2)
-        purchase_chance = 0.12
-        print(f"Weekend traffic simulation. Desktop share this run: {DESKTOP_SHARE:.0%}")
-    else:
-        num_users = random.randint(40, 120)
-        session_range = (1, 3)
-        purchase_chance = 0.22
-        print(f"Weekday traffic simulation. Desktop share this run: {DESKTOP_SHARE:.0%}")
+    # Bigger user pool to avoid "hundreds of sessions, <10 users"
+    user_pool_size = _env_int("USER_POOL_SIZE", DEFAULT_USER_POOL_SIZE)
+    sessions_per_run = _env_int("SESSIONS_PER_RUN", DEFAULT_SESSIONS_PER_RUN)
 
-    sampled_users = random.sample(USER_POOL, num_users)
+    # Keep a stable pool for this run
+    users = [make_client_id() for _ in range(user_pool_size)]
+    session_numbers = {cid: 0 for cid in users}
 
-    # Returning user behavior:
-    # - 25% of users get an extra session to create returning sessions.
-    returning_boost = set(random.sample(sampled_users, k=max(1, int(len(sampled_users) * 0.25))))
-
-    for client_id in sampled_users:
-        sessions = random.randint(*session_range)
-        if client_id in returning_boost:
-            sessions += 1
-
-        for _ in range(sessions):
-            simulate_session(client_id, purchase_chance=purchase_chance)
-            # Short delay between sessions to avoid identical ingestion timestamps
-            time.sleep(random.uniform(0.2, 1.2))
+    for _ in range(sessions_per_run):
+        cid = random.choice(users)
+        session_numbers[cid] += 1
+        simulate_session(cid, session_numbers[cid], desktop_share)
+        # Small pacing gap so we don't burst too aggressively
+        time.sleep(random.uniform(0.2, 0.7))
 
 if __name__ == "__main__":
     main()
