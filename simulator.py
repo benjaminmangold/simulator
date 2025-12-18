@@ -48,7 +48,7 @@ DEFAULT_USER_POOL_SIZE = 50 if SIMULATOR_MODE == "debug" else 400
 SESSIONS_PER_RUN = int(os.getenv("SESSIONS_PER_RUN", str(DEFAULT_SESSIONS_PER_RUN)))
 USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-two.com").rstrip("/")
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-three.com").rstrip("/")
 
 CAMPAIGN_TAGGING = os.getenv("CAMPAIGN_TAGGING", "0").strip().lower() in ("1","true","yes")
 CAMPAIGN_TAGGING_MODE = os.getenv("CAMPAIGN_TAGGING_MODE", "prefer").strip().lower()
@@ -276,7 +276,7 @@ def simulate_one_session(client_id: str) -> None:
 
     # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
     pv1_params = {
-        "session_id": ga_session_id,
+        "ga_session_id": ga_session_id,
         "ga_session_number": ga_session_number,
         "page_location": first_url,
         "page_title": first_path.strip("/").title() or "Home",
@@ -307,7 +307,7 @@ def simulate_one_session(client_id: str) -> None:
     # Engagement helper event at +12s (75% of sessions)
     if random.random() < 0.75:
         scroll_params = {
-            "session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "language": lang,
             "engagement_time_msec": random.randint(800, 2500),
@@ -321,7 +321,7 @@ def simulate_one_session(client_id: str) -> None:
     for path in paths[1:]:
         url = f"{BASE_DOMAIN}{path}"
         params = {
-            "session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "page_location": url,
             "page_title": path.strip("/").title() or "Home",
@@ -349,7 +349,7 @@ def simulate_one_session(client_id: str) -> None:
 
         def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
             params = {
-                "session_id": ga_session_id,
+                "ga_session_id": ga_session_id,
                 "ga_session_number": ga_session_number,
                 "currency": currency,
                 "items": [item],
