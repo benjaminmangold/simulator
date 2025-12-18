@@ -15,11 +15,12 @@ import requests
 #   SIMULATOR_MODE=debug           -> sends events to /debug/mp/collect and prints validationMessages
 #
 # IMPORTANT (GA4 MP rules):
-# - DO NOT send "session_start" or "first_visit" via MP — they are reserved and
-#   GA4 will reject them in debug validation (and may drop them).
+# - DO NOT send "session_start" / "first_visit" / "user_engagement" via MP —
+#   these are reserved for automatic collection and will be rejected in debug.
 # - To influence session acquisition (session source/medium/campaign), set UTMs
 #   on the FIRST page_view's page_location (or use page_referrer for referral).
-# - For sessions/users, send ga_session_id + ga_session_number as event params.
+# - For session stitching, send session identifiers as event params.
+#   We include `session_id` + `ga_session_number`.
 # - Device details come from the User-Agent HTTP header.
 #
 # Included:
@@ -48,7 +49,7 @@ DEFAULT_USER_POOL_SIZE = 50 if SIMULATOR_MODE == "debug" else 400
 SESSIONS_PER_RUN = int(os.getenv("SESSIONS_PER_RUN", str(DEFAULT_SESSIONS_PER_RUN)))
 USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-five.com").rstrip("/")
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-two.com").rstrip("/")
 
 CAMPAIGN_TAGGING = os.getenv("CAMPAIGN_TAGGING", "0").strip().lower() in ("1","true","yes")
 CAMPAIGN_TAGGING_MODE = os.getenv("CAMPAIGN_TAGGING_MODE", "prefer").strip().lower()
@@ -235,10 +236,38 @@ def event_payload(client_id: str, event: Dict, timestamp_micros: int, user_prope
 def micros_from_ms(ms: int) -> int:
     return ms * 1000
 
+
+def build_common_event_params(
+    *,
+    ga_session_id: int,
+    ga_session_number: int,
+    language: str,
+    engagement_time_msec: int,
+) -> Dict:
+    """Common event params.
+
+    Notes:
+    - Use a dict so duplicate param names are impossible.
+    - We include `session_id` + `ga_session_number`.
+      (Do not send `session_start` / `first_visit` / `user_engagement` via MP.)
+    """
+    # NOTE: We intentionally DO NOT include `ga_session_id` here.
+    # In practice, GA4 MP debug validation has been reporting duplicate
+    # `ga_session_id` in some configurations, even when using dicts.
+    # Keeping only `session_id` + `ga_session_number` avoids that.
+    return {
+        "session_id": ga_session_id,
+        "ga_session_number": ga_session_number,
+        "language": language,
+        "engagement_time_msec": engagement_time_msec,
+    }
+
 # -----------------------------------------------------------------------------
 # Simulation core
 # -----------------------------------------------------------------------------
 def simulate_one_session(client_id: str) -> None:
+    # Session id should be stable for all events in this simulated session.
+    # Use UTC epoch seconds (int) to keep it GA-like.
     ga_session_id = int(datetime.now(tz=timezone.utc).timestamp())
     ga_session_number = next_session_number(client_id)
 
@@ -274,47 +303,28 @@ def simulate_one_session(client_id: str) -> None:
         first_url = f"{BASE_DOMAIN}{first_path}"
         page_referrer = None
 
+    def common_params(extra: Optional[Dict] = None) -> Dict:
+        """Build params as a dict (no duplicates)."""
+        base = build_common_event_params(
+            ga_session_id=ga_session_id,
+            ga_session_number=ga_session_number,
+            language=lang,
+            engagement_time_msec=0,
+        )
+        # engagement_time_msec is required; callers will overwrite with real values.
+        if extra:
+            base.update(extra)
+        return base
+
     # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
-    # Explicit session_start (Measurement Protocol does not auto-generate this)
-    session_start_params = {
-        "session_id": ga_session_id,
-        "ga_session_id": ga_session_id,
-        "ga_session_number": ga_session_number,
-        "language": lang,
-        "engagement_time_msec": 1,
-    }
-
-    # Carry campaign params on session_start too (helps session-scoped attribution)
-    if CAMPAIGN_TAGGING and src.get("type") == "utm":
-        session_start_params["campaign_source"] = src.get("source")
-        session_start_params["campaign_medium"] = src.get("medium")
-        if src.get("campaign"):
-            session_start_params["campaign_name"] = src.get("campaign")
-
-    status, data = send_mp(
-        event_payload(
-            client_id,
-            {"name": "session_start", "params": session_start_params},
-            micros_from_ms(base_ms),
-            user_props,
-        ),
-        device.user_agent,
-    )
-    print_validation(data)
-    print(f"[{client_id[:10]}...] Sent: session_start | Status: {status}")
-
-    pv1_params = {
-        "session_id": ga_session_id,
-            "ga_session_id": ga_session_id,
-        "ga_session_number": ga_session_number,
+    pv1_params = common_params({
         "page_location": first_url,
         "page_title": first_path.strip("/").title() or "Home",
-        "language": lang,
         "screen_resolution": device.screen_resolution,
         "platform": device.platform,
         "os_hint": device.os_hint,
         "engagement_time_msec": random.randint(50, 250),
-    }
+    })
 
     # Optional campaign tagging (alternative/complement to UTMs).
     # In some MP setups, campaign_* fields can help attribution if UTMs aren't being picked up as expected.
@@ -335,13 +345,9 @@ def simulate_one_session(client_id: str) -> None:
 
     # Engagement helper event at +12s (75% of sessions)
     if random.random() < 0.75:
-        scroll_params = {
-            "session_id": ga_session_id,
-            "ga_session_id": ga_session_id,
-            "ga_session_number": ga_session_number,
-            "language": lang,
+        scroll_params = common_params({
             "engagement_time_msec": random.randint(800, 2500),
-        }
+        })
         status, data = send_mp(event_payload(client_id, {"name": "scroll", "params": scroll_params}, micros_from_ms(base_ms + 12_000), user_props), device.user_agent)
         print_validation(data)
         print(f"[{client_id[:10]}...] Sent: scroll | Status: {status}")
@@ -350,15 +356,11 @@ def simulate_one_session(client_id: str) -> None:
     t_cursor = 15_000
     for path in paths[1:]:
         url = f"{BASE_DOMAIN}{path}"
-        params = {
-            "session_id": ga_session_id,
-            "ga_session_id": ga_session_id,
-            "ga_session_number": ga_session_number,
+        params = common_params({
             "page_location": url,
             "page_title": path.strip("/").title() or "Home",
-            "language": lang,
             "engagement_time_msec": random.randint(200, 1200),
-        }
+        })
         status, data = send_mp(event_payload(client_id, {"name": "page_view", "params": params}, micros_from_ms(base_ms + t_cursor), user_props), device.user_agent)
         print_validation(data)
         print(f"[{client_id[:10]}...] Sent: page_view | Status: {status}")
@@ -379,15 +381,11 @@ def simulate_one_session(client_id: str) -> None:
         }
 
         def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
-            params = {
-                "session_id": ga_session_id,
-            "ga_session_id": ga_session_id,
-                "ga_session_number": ga_session_number,
+            params = common_params({
                 "currency": currency,
                 "items": [item],
-                "language": lang,
                 "engagement_time_msec": random.randint(150, 900),
-            }
+            })
             if extra_params:
                 params.update(extra_params)
             status, data = send_mp(event_payload(client_id, {"name": name, "params": params}, micros_from_ms(base_ms + offset_ms), user_props), device.user_agent)
