@@ -14,7 +14,7 @@ API_SECRET = os.getenv("API_SECRET")
 
 # Mode switch:
 #   SIMULATOR_MODE=live  -> sends to /mp/collect (default)
-#   SIMULATOR_MODE=debug -> sends to /mp/debug/collect and prints validationMessages
+#   SIMULATOR_MODE=debug -> sends to /debug/mp/collect and prints validationMessages
 # Backward-compatible: DEBUG=1 also enables debug mode.
 SIMULATOR_MODE = os.getenv("SIMULATOR_MODE", "live").strip().lower()
 DEBUG_FLAG = os.getenv("DEBUG", "").strip().lower() in ("1", "true", "yes", "y")
@@ -25,7 +25,7 @@ if not MEASUREMENT_ID or not API_SECRET:
     raise RuntimeError("Missing MEASUREMENT_ID or API_SECRET environment variables.")
 
 MP_COLLECT = "https://www.google-analytics.com/mp/collect"
-MP_DEBUG_COLLECT = "https://www.google-analytics.com/mp/debug/collect"
+MP_DEBUG_COLLECT = "https://www.google-analytics.com/debug/mp/collect"
 
 # ----------------------------
 # Debug presets
