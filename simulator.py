@@ -49,7 +49,7 @@ DEFAULT_USER_POOL_SIZE = 50 if SIMULATOR_MODE == "debug" else 400
 SESSIONS_PER_RUN = int(os.getenv("SESSIONS_PER_RUN", str(DEFAULT_SESSIONS_PER_RUN)))
 USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-two.com").rstrip("/")
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test.com").rstrip("/")
 
 CAMPAIGN_TAGGING = os.getenv("CAMPAIGN_TAGGING", "0").strip().lower() in ("1","true","yes")
 CAMPAIGN_TAGGING_MODE = os.getenv("CAMPAIGN_TAGGING_MODE", "prefer").strip().lower()
