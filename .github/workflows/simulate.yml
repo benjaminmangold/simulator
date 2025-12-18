@@ -23,4 +23,5 @@ jobs:
         env:
           MEASUREMENT_ID: ${{ secrets.MEASUREMENT_ID }}
           API_SECRET: ${{ secrets.API_SECRET }}
+          SIMULATOR_MODE: debug
         run: python simulator.py
