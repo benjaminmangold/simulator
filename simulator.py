@@ -7,6 +7,29 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 import requests
 
+# -----------------------------------------------------------------------------
+# GA4 Measurement Protocol traffic simulator (web)
+#
+# Modes:
+#   SIMULATOR_MODE=live  (default)  -> sends events to /mp/collect
+#   SIMULATOR_MODE=debug           -> sends events to /debug/mp/collect and prints validationMessages
+#
+# IMPORTANT (GA4 MP rules):
+# - DO NOT send "session_start" or "first_visit" via MP — they are reserved and
+#   GA4 will reject them in debug validation (and may drop them).
+# - To influence session acquisition (session source/medium/campaign), set UTMs
+#   on the FIRST page_view's page_location (or use page_referrer for referral).
+# - For sessions/users, send ga_session_id + ga_session_number as event params.
+# - Device details come from the User-Agent HTTP header.
+#
+# Included:
+# - client_id pool (realistic users vs sessions)
+# - engagement via timestamps + engagement_time_msec + delayed events + 2+ pageviews
+# - language (no "Other")
+# - randomized desktop share per run between 65% and 85%
+# - ecommerce funnel: view_item -> add_to_cart -> begin_checkout -> purchase
+# -----------------------------------------------------------------------------
+
 MEASUREMENT_ID = os.getenv("MEASUREMENT_ID", "").strip()
 API_SECRET = os.getenv("API_SECRET", "").strip()
 SIMULATOR_MODE = os.getenv("SIMULATOR_MODE", "live").strip().lower()
@@ -25,7 +48,13 @@ DEFAULT_USER_POOL_SIZE = 50 if SIMULATOR_MODE == "debug" else 400
 SESSIONS_PER_RUN = int(os.getenv("SESSIONS_PER_RUN", str(DEFAULT_SESSIONS_PER_RUN)))
 USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test.com").rstrip("/")
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-two.com").rstrip("/")
+
+CAMPAIGN_TAGGING = os.getenv("CAMPAIGN_TAGGING", "0").strip().lower() in ("1","true","yes")
+CAMPAIGN_TAGGING_MODE = os.getenv("CAMPAIGN_TAGGING_MODE", "prefer").strip().lower()
+# CAMPAIGN_TAGGING_MODE:
+#   "prefer" -> include campaign_* params AND keep UTMs
+#   "only"   -> include campaign_* params and DO NOT add UTMs to page_location
 
 # Desktop share randomized per run between 65% and 85%
 DESKTOP_SHARE = random.randint(65, 85) / 100.0
@@ -99,8 +128,10 @@ def weighted_choice(options: List[Dict]) -> Dict:
         upto += w
     return options[-1]
 
-def build_url_with_utms(path: str, src: Dict) -> str:
+def build_url_with_utms(path: str, src: Dict, add_utms: bool = True) -> str:
     base = f"{BASE_DOMAIN}{path}"
+    if not add_utms:
+        return base
     params = [f"utm_source={src['source']}", f"utm_medium={src['medium']}"]
     if src.get("campaign"):
         params.append(f"utm_campaign={src['campaign']}")
@@ -230,7 +261,8 @@ def simulate_one_session(client_id: str) -> None:
     page_referrer = None
 
     if src["type"] == "utm":
-        first_url = build_url_with_utms(first_path, src)
+        add_utms = not (CAMPAIGN_TAGGING and CAMPAIGN_TAGGING_MODE == "only")
+        first_url = build_url_with_utms(first_path, src, add_utms=add_utms)
         page_referrer = src.get("referrer")
     elif src["type"] == "referral":
         first_url = f"{BASE_DOMAIN}{first_path}"
@@ -244,7 +276,7 @@ def simulate_one_session(client_id: str) -> None:
 
     # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
     pv1_params = {
-        "ga_session_id": ga_session_id,
+        "session_id": ga_session_id,
         "ga_session_number": ga_session_number,
         "page_location": first_url,
         "page_title": first_path.strip("/").title() or "Home",
@@ -254,6 +286,17 @@ def simulate_one_session(client_id: str) -> None:
         "os_hint": device.os_hint,
         "engagement_time_msec": random.randint(50, 250),
     }
+
+    # Optional campaign tagging (alternative/complement to UTMs).
+    # In some MP setups, campaign_* fields can help attribution if UTMs aren't being picked up as expected.
+    # Mode "prefer" keeps UTMs and adds campaign_* fields.
+    # Mode "only" removes UTMs from page_location and relies on campaign_* fields.
+    if CAMPAIGN_TAGGING and src.get("type") == "utm":
+        pv1_params["campaign_source"] = src.get("source")
+        pv1_params["campaign_medium"] = src.get("medium")
+        if src.get("campaign"):
+            pv1_params["campaign_name"] = src.get("campaign")
+
     if page_referrer:
         pv1_params["page_referrer"] = page_referrer
 
@@ -264,7 +307,7 @@ def simulate_one_session(client_id: str) -> None:
     # Engagement helper event at +12s (75% of sessions)
     if random.random() < 0.75:
         scroll_params = {
-            "ga_session_id": ga_session_id,
+            "session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "language": lang,
             "engagement_time_msec": random.randint(800, 2500),
@@ -278,7 +321,7 @@ def simulate_one_session(client_id: str) -> None:
     for path in paths[1:]:
         url = f"{BASE_DOMAIN}{path}"
         params = {
-            "ga_session_id": ga_session_id,
+            "session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "page_location": url,
             "page_title": path.strip("/").title() or "Home",
@@ -306,7 +349,7 @@ def simulate_one_session(client_id: str) -> None:
 
         def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
             params = {
-                "ga_session_id": ga_session_id,
+                "session_id": ga_session_id,
                 "ga_session_number": ga_session_number,
                 "currency": currency,
                 "items": [item],
