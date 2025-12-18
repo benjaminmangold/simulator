@@ -27,18 +27,17 @@ USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test.com").rstrip("/")
 
-# Desktop share randomized per run between 65% and 85% (user requirement)
+# Desktop share randomized per run between 65% and 85%
 DESKTOP_SHARE = random.randint(65, 85) / 100.0
 
 # -----------------------------------------------------------------------------
-# Pages + products (keeps your original product set + adds Ads course)
+# Pages + products (keeps your original product set)
 # -----------------------------------------------------------------------------
 PAGES = [
     "/", "/blog/", "/blog/google-analytics-4-course/", "/blog/ga4-events/",
     "/training/", "/courses/", "/contact/", "/about/"
 ]
 
-# Accept the older "id/name/category/price" concept, but map to GA4 item fields.
 PRODUCTS = [
     {"id": "sku_201", "name": "GA4 Complete Course", "category": "Courses", "price": 225.00},
     {"id": "sku_202", "name": "Google Tag Manager Course", "category": "Courses", "price": 225.00},
@@ -50,16 +49,7 @@ CURRENCIES = ["AUD", "USD"]
 LANGUAGES = ["en-au", "en-us", "en-gb", "de-de", "fr-fr"]
 
 # -----------------------------------------------------------------------------
-# Traffic sources
-#
-# Two simulation styles:
-# - UTM-based: ensures session_source/session_medium appear exactly as specified.
-# - Referral-based: uses page_referrer to let GA4 classify as referral.
-#
-# Notes:
-# - Some "odd" combos like medium="(not set)" are not reliably forced via UTMs.
-#   (GA4 uses "(not set)" when it can't determine acquisition. With page_location
-#   present, you'll typically get direct/none rather than not set.)
+# Traffic sources (preserves your variety)
 # -----------------------------------------------------------------------------
 TRAFFIC_SOURCES: List[Dict] = [
     # Organic search
@@ -94,8 +84,7 @@ TRAFFIC_SOURCES: List[Dict] = [
     # Direct
     {"type": "direct", "source": "(direct)", "medium": "(none)", "campaign": None, "weight": 12, "referrer": None},
 
-    # A "quirky" entry similar to your "(not set)" idea — we simulate this as "no referrer + no UTMs".
-    # GA4 will generally treat this as direct/none, not "(not set)".
+    # Quirky entry (cannot reliably force "(not set)" as a session medium via MP)
     {"type": "unknown", "source": "chatgpt.com", "medium": "(not set)", "campaign": None, "weight": 1, "referrer": None},
 ]
 
@@ -112,9 +101,7 @@ def weighted_choice(options: List[Dict]) -> Dict:
 
 def build_url_with_utms(path: str, src: Dict) -> str:
     base = f"{BASE_DOMAIN}{path}"
-    params = []
-    params.append(f"utm_source={src['source']}")
-    params.append(f"utm_medium={src['medium']}")
+    params = [f"utm_source={src['source']}", f"utm_medium={src['medium']}"]
     if src.get("campaign"):
         params.append(f"utm_campaign={src['campaign']}")
     joiner = "&" if "?" in base else "?"
@@ -122,11 +109,10 @@ def build_url_with_utms(path: str, src: Dict) -> str:
 
 # -----------------------------------------------------------------------------
 # Device profiles (UA + resolution + platform/os hints)
-# GA4 device details primarily come from the User-Agent header.
 # -----------------------------------------------------------------------------
 @dataclass(frozen=True)
 class DeviceProfile:
-    kind: str                # "desktop" or "mobile"
+    kind: str  # "desktop" or "mobile"
     user_agent: str
     screen_resolution: str
     platform: str
@@ -209,15 +195,8 @@ def print_validation(data: Optional[Dict]) -> None:
             desc = m.get("description") or str(m)
             print(f" - {desc}")
 
-def event_payload(
-    client_id: str,
-    events: List[Dict],
-    timestamp_micros: Optional[int] = None,
-    user_properties: Optional[Dict] = None,
-) -> Dict:
-    payload: Dict = {"client_id": client_id, "events": events}
-    if timestamp_micros is not None:
-        payload["timestamp_micros"] = int(timestamp_micros)
+def event_payload(client_id: str, event: Dict, timestamp_micros: int, user_properties: Optional[Dict]) -> Dict:
+    payload: Dict = {"client_id": client_id, "events": [event], "timestamp_micros": int(timestamp_micros)}
     if user_properties:
         payload["user_properties"] = user_properties
     return payload
@@ -243,11 +222,10 @@ def simulate_one_session(client_id: str) -> None:
 
     base_ms = int(time.time() * 1000)
 
-    # Choose pages for this session
+    # Choose pages for this session (ensure at least 2 pageviews for engagement)
     page_count = random.randint(2, 6)
     paths = random.sample(PAGES, k=min(page_count, len(PAGES)))
 
-    # Acquisition: set on FIRST page_view
     first_path = paths[0]
     page_referrer = None
 
@@ -264,24 +242,7 @@ def simulate_one_session(client_id: str) -> None:
         first_url = f"{BASE_DOMAIN}{first_path}"
         page_referrer = None
 
-    # 1) session_start (t=0)
-    events = [{
-        "name": "session_start",
-        "params": {
-            "ga_session_id": ga_session_id,
-            "ga_session_number": ga_session_number,
-            "language": lang,
-            "screen_resolution": device.screen_resolution,
-            "platform": device.platform,
-            "os_hint": device.os_hint,
-            "engagement_time_msec": 1,
-        }
-    }]
-    status, data = send_mp(event_payload(client_id, events, micros_from_ms(base_ms), user_props), device.user_agent)
-    print_validation(data)
-    print(f"[{client_id[:10]}...] Sent: session_start | Status: {status}")
-
-    # 2) first page_view (t=100ms) — acquisition happens here
+    # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
     pv1_params = {
         "ga_session_id": ga_session_id,
         "ga_session_number": ga_session_number,
@@ -296,11 +257,11 @@ def simulate_one_session(client_id: str) -> None:
     if page_referrer:
         pv1_params["page_referrer"] = page_referrer
 
-    status, data = send_mp(event_payload(client_id, [{"name": "page_view", "params": pv1_params}], micros_from_ms(base_ms + 100), user_props), device.user_agent)
+    status, data = send_mp(event_payload(client_id, {"name": "page_view", "params": pv1_params}, micros_from_ms(base_ms), user_props), device.user_agent)
     print_validation(data)
     print(f"[{client_id[:10]}...] Sent: page_view | Status: {status}")
 
-    # 3) engagement helper event at +12s (75% of sessions)
+    # Engagement helper event at +12s (75% of sessions)
     if random.random() < 0.75:
         scroll_params = {
             "ga_session_id": ga_session_id,
@@ -308,11 +269,11 @@ def simulate_one_session(client_id: str) -> None:
             "language": lang,
             "engagement_time_msec": random.randint(800, 2500),
         }
-        status, data = send_mp(event_payload(client_id, [{"name": "scroll", "params": scroll_params}], micros_from_ms(base_ms + 12_000), user_props), device.user_agent)
+        status, data = send_mp(event_payload(client_id, {"name": "scroll", "params": scroll_params}, micros_from_ms(base_ms + 12_000), user_props), device.user_agent)
         print_validation(data)
         print(f"[{client_id[:10]}...] Sent: scroll | Status: {status}")
 
-    # 4) additional page_views
+    # Additional page_views
     t_cursor = 15_000
     for path in paths[1:]:
         url = f"{BASE_DOMAIN}{path}"
@@ -324,16 +285,15 @@ def simulate_one_session(client_id: str) -> None:
             "language": lang,
             "engagement_time_msec": random.randint(200, 1200),
         }
-        status, data = send_mp(event_payload(client_id, [{"name": "page_view", "params": params}], micros_from_ms(base_ms + t_cursor), user_props), device.user_agent)
+        status, data = send_mp(event_payload(client_id, {"name": "page_view", "params": params}, micros_from_ms(base_ms + t_cursor), user_props), device.user_agent)
         print_validation(data)
         print(f"[{client_id[:10]}...] Sent: page_view | Status: {status}")
         t_cursor += random.randint(3_000, 8_000)
 
-    # 5) Ecommerce funnel (25% of sessions)
+    # Ecommerce funnel (25% of sessions)
     if random.random() < 0.25:
         product = random.choice(PRODUCTS)
         currency = random.choice(CURRENCIES)
-        qty = 1
         price = float(product["price"])
 
         item = {
@@ -341,10 +301,10 @@ def simulate_one_session(client_id: str) -> None:
             "item_name": product["name"],
             "item_category": product["category"],
             "price": price,
-            "quantity": qty,
+            "quantity": 1,
         }
 
-        def send_ecom(name: str, extra_params: Optional[Dict] = None, offset_ms: int = 0):
+        def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
             params = {
                 "ga_session_id": ga_session_id,
                 "ga_session_number": ga_session_number,
@@ -355,29 +315,28 @@ def simulate_one_session(client_id: str) -> None:
             }
             if extra_params:
                 params.update(extra_params)
-            status, data = send_mp(event_payload(client_id, [{"name": name, "params": params}], micros_from_ms(base_ms + offset_ms), user_props), device.user_agent)
+            status, data = send_mp(event_payload(client_id, {"name": name, "params": params}, micros_from_ms(base_ms + offset_ms), user_props), device.user_agent)
             print_validation(data)
             print(f"[{client_id[:10]}...] Sent: {name} | Status: {status}")
 
-        send_ecom("view_item", {"value": price}, offset_ms=4_000)
+        send_ecom("view_item", {"value": price}, 4_000)
 
         if random.random() < 0.60:
-            send_ecom("add_to_cart", {"value": price}, offset_ms=8_000)
+            send_ecom("add_to_cart", {"value": price}, 8_000)
 
             if random.random() < 0.55:
-                send_ecom("begin_checkout", {"value": price}, offset_ms=13_000)
+                send_ecom("begin_checkout", {"value": price}, 13_000)
 
                 if random.random() < 0.35:
-                    txn_id = str(uuid.uuid4())
                     send_ecom(
                         "purchase",
                         {
-                            "transaction_id": txn_id,
+                            "transaction_id": str(uuid.uuid4()),
                             "value": price,
                             "tax": round(price * 0.1, 2),
                             "shipping": 0.0,
                         },
-                        offset_ms=22_000
+                        22_000
                     )
 
 def main() -> None:
