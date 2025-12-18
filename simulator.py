@@ -48,7 +48,7 @@ DEFAULT_USER_POOL_SIZE = 50 if SIMULATOR_MODE == "debug" else 400
 SESSIONS_PER_RUN = int(os.getenv("SESSIONS_PER_RUN", str(DEFAULT_SESSIONS_PER_RUN)))
 USER_POOL_SIZE = int(os.getenv("USER_POOL_SIZE", str(DEFAULT_USER_POOL_SIZE)))
 
-BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-three.com").rstrip("/")
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "https://www.lovesdata-test-five.com").rstrip("/")
 
 CAMPAIGN_TAGGING = os.getenv("CAMPAIGN_TAGGING", "0").strip().lower() in ("1","true","yes")
 CAMPAIGN_TAGGING_MODE = os.getenv("CAMPAIGN_TAGGING_MODE", "prefer").strip().lower()
@@ -275,9 +275,37 @@ def simulate_one_session(client_id: str) -> None:
         page_referrer = None
 
     # FIRST page_view (t=0) — acquisition happens here (UTMs/referrer)
-    pv1_params = {
+    # Explicit session_start (Measurement Protocol does not auto-generate this)
+    session_start_params = {
         "session_id": ga_session_id,
         "ga_session_id": ga_session_id,
+        "ga_session_number": ga_session_number,
+        "language": lang,
+        "engagement_time_msec": 1,
+    }
+
+    # Carry campaign params on session_start too (helps session-scoped attribution)
+    if CAMPAIGN_TAGGING and src.get("type") == "utm":
+        session_start_params["campaign_source"] = src.get("source")
+        session_start_params["campaign_medium"] = src.get("medium")
+        if src.get("campaign"):
+            session_start_params["campaign_name"] = src.get("campaign")
+
+    status, data = send_mp(
+        event_payload(
+            client_id,
+            {"name": "session_start", "params": session_start_params},
+            micros_from_ms(base_ms),
+            user_props,
+        ),
+        device.user_agent,
+    )
+    print_validation(data)
+    print(f"[{client_id[:10]}...] Sent: session_start | Status: {status}")
+
+    pv1_params = {
+        "session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
         "ga_session_number": ga_session_number,
         "page_location": first_url,
         "page_title": first_path.strip("/").title() or "Home",
@@ -309,7 +337,7 @@ def simulate_one_session(client_id: str) -> None:
     if random.random() < 0.75:
         scroll_params = {
             "session_id": ga_session_id,
-        "ga_session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "language": lang,
             "engagement_time_msec": random.randint(800, 2500),
@@ -324,7 +352,7 @@ def simulate_one_session(client_id: str) -> None:
         url = f"{BASE_DOMAIN}{path}"
         params = {
             "session_id": ga_session_id,
-        "ga_session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
             "ga_session_number": ga_session_number,
             "page_location": url,
             "page_title": path.strip("/").title() or "Home",
@@ -353,7 +381,7 @@ def simulate_one_session(client_id: str) -> None:
         def send_ecom(name: str, extra_params: Optional[Dict], offset_ms: int):
             params = {
                 "session_id": ga_session_id,
-        "ga_session_id": ga_session_id,
+            "ga_session_id": ga_session_id,
                 "ga_session_number": ga_session_number,
                 "currency": currency,
                 "items": [item],
