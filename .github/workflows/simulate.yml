@@ -7,8 +7,12 @@ on:
         description: "Simulator mode (live or debug)"
         required: false
         default: "debug"
+        type: choice
+        options:
+          - live
+          - debug
   schedule:
-    - cron: '0 * * * *'
+    - cron: "0 * * * *" # Every hour (UTC)
 
 jobs:
   simulate:
@@ -19,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -28,7 +32,9 @@ jobs:
         env:
           MEASUREMENT_ID: ${{ secrets.MEASUREMENT_ID }}
           API_SECRET: ${{ secrets.API_SECRET }}
-          SIMULATOR_MODE: ${{ github.event_name == 'schedule' && 'live' || 'debug' }}
+          # Scheduled runs should always be LIVE.
+          # Manual runs should use the selected input (live/debug).
+          SIMULATOR_MODE: ${{ github.event_name == 'schedule' && 'live' || inputs.mode }}
           CAMPAIGN_TAGGING: "1"
           CAMPAIGN_TAGGING_MODE: prefer
-        run: python simulator.py
+        run: python simulator_updated2.py
