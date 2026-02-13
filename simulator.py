@@ -14,8 +14,6 @@ import requests
 #   SIMULATOR_MODE=live  (default)  -> sends events to /mp/collect
 #   SIMULATOR_MODE=debug           -> sends events to /debug/mp/collect and prints validationMessages
 #
-# 13/02/26 Comment
-#
 # IMPORTANT (GA4 MP rules):
 # - DO NOT send "session_start" or "first_visit" via MP — they are reserved and
 #   GA4 will reject them in debug validation (and may drop them).
