@@ -303,10 +303,10 @@ def event_payload(client_id: str, event: Dict, timestamp_micros: int, user_prope
         "client_id": client_id,
         "events": [event],
         "timestamp_micros": int(timestamp_micros),
-        # Consent Mode v2 signals - all granted
+        # Consent Mode v2 signals for Measurement Protocol
+        # Note: Only ad_user_data and ad_personalization are supported in MP.
+        # analytics_storage and ad_storage are client-side only (gtag.js/GTM).
         "consent": {
-            "analytics_storage": "GRANTED",
-            "ad_storage": "GRANTED",
             "ad_user_data": "GRANTED",
             "ad_personalization": "GRANTED",
         },
