@@ -30,7 +30,7 @@ import requests
 # - ecommerce funnel: view_item -> add_to_cart -> begin_checkout -> purchase
 # - weighted page distribution for realistic view variance
 # - ecommerce events associated with page paths
-# - Consent Mode v2 signals (analytics_storage, ad_storage, ad_user_data, ad_personalization)
+# - Consent Mode v2 signals
 # -----------------------------------------------------------------------------
 
 MEASUREMENT_ID = os.getenv("MEASUREMENT_ID", "").strip()
@@ -303,12 +303,9 @@ def event_payload(client_id: str, event: Dict, timestamp_micros: int, user_prope
         "client_id": client_id,
         "events": [event],
         "timestamp_micros": int(timestamp_micros),
-        # Consent Mode v2 signals
-        # Note: ad_user_data and ad_personalization are officially documented for MP.
-        # analytics_storage and ad_storage are included for testing but may be ignored.
+        # Consent Mode v2 signals for Measurement Protocol
+        # Only ad_user_data and ad_personalization are supported in MP.
         "consent": {
-            "analytics_storage": "GRANTED",
-            "ad_storage": "GRANTED",
             "ad_user_data": "GRANTED",
             "ad_personalization": "GRANTED",
         },
